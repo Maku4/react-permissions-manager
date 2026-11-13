@@ -1,0 +1,73 @@
+{
+  "name": "@react-permissions-manager/core",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "Typed, declarative permission checks for React: features, actions, roles and guards",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.cjs",
+    "dist/**/*.d.ts",
+    "dist/**/*.d.cts",
+    "!dist/**/*.test-d.ts"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsdown",
+    "type-check": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint . --ext .ts,.tsx",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run --root ../.. packages/core/",
+    "test:coverage": "vitest run --root ../.. packages/core/ --coverage",
+    "test:types": "node scripts/generate-tsd-index.cjs && tsd"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0 || ^19.0.0"
+  },
+  "devDependencies": {
+    "react": "^19.3.0",
+    "tsd": "^0.33.0"
+  },
+  "dependencies": {},
+  "keywords": [
+    "react",
+    "permissions",
+    "authorization",
+    "rbac",
+    "abac",
+    "access-control",
+    "typescript",
+    "type-safe"
+  ],
+  "author": "Mateusz Kuplowski",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Maku4/react-permissions-manager.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/Maku4/react-permissions-manager#readme",
+  "bugs": {
+    "url": "https://github.com/Maku4/react-permissions-manager/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

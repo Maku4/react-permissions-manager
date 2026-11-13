@@ -1,0 +1,8 @@
+packages:
+  - .
+  - packages/*
+
+overrides:
+  # typescript-estree 8.72 still asks for minimatch 10, which has
+  # GHSA-g3hv-75wg-m249. Its next release moves to 11, so drop this then.
+  '@typescript-eslint/typescript-estree>minimatch': ^11.0.1
