@@ -4,6 +4,13 @@ import { version as packageVersion } from '../package.json';
 export { createPermissionsAPI } from './createPermissionsAPI';
 export { definePermissionsConfig } from './definePermissionsConfig';
 
+// Checks outside React
+export { createPermissionChecker } from './createPermissionChecker';
+export type {
+  CreateCheckerOptions,
+  PermissionSubject,
+} from './createPermissionChecker';
+
 // Manager and store hook, for integrations and advanced usage
 export { PermissionsManager } from './manager/PermissionsManager';
 export type {
