@@ -63,7 +63,21 @@ describe('updates after the first render', () => {
     expect(screen.getByText('allowed')).toBeInTheDocument();
   });
 
-  it('denies everything while permissions are loading', async () => {
+  it('denies everything while the status is loading', () => {
+    const { Can, core } = createPermissionsAPI(config);
+    core.grant(['DocsRead']);
+    render(
+      <Can I="read" a="docs" fallback={<span>denied</span>}>
+        <span>allowed</span>
+      </Can>
+    );
+    expect(screen.getByText('allowed')).toBeInTheDocument();
+
+    act(() => core.startLoading());
+    expect(screen.getByText('denied')).toBeInTheDocument();
+  });
+
+  it('a reload keeps the current grants, then replaces them', async () => {
     const { Can, core } = createPermissionsAPI(config);
     core.grant(['DocsRead']);
     let finishLoading: (value: { permissions: string[] }) => void = () => {};
@@ -72,7 +86,6 @@ describe('updates after the first render', () => {
         <span>allowed</span>
       </Can>
     );
-    expect(screen.getByText('allowed')).toBeInTheDocument();
 
     let loading: Promise<void> = Promise.resolve();
     act(() => {
@@ -80,13 +93,13 @@ describe('updates after the first render', () => {
         () => new Promise((resolve) => (finishLoading = resolve))
       );
     });
-    expect(screen.getByText('denied')).toBeInTheDocument();
+    expect(screen.getByText('allowed')).toBeInTheDocument();
 
     await act(async () => {
       finishLoading({ permissions: ['DocsUpdate'] });
       await loading;
     });
-    expect(screen.getByText('allowed')).toBeInTheDocument();
+    expect(screen.getByText('denied')).toBeInTheDocument();
   });
 });
 

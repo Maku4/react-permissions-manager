@@ -19,6 +19,7 @@ import type {
   PermissionGateRequire,
   PermissionsConfig,
   PermissionState,
+  PermissionsStatus,
   TooltipComponent,
   UIPolicyEntry,
   UIPolicyMode,
@@ -79,7 +80,7 @@ export function createPermissionsAPI<
   type Contexts = FeatureContexts<TCfg, TGuards>;
   type State = PermissionState<TCfg>;
 
-  const manager = new PermissionsManager<TCfg>();
+  const manager = new PermissionsManager<TCfg>(options.initial);
 
   const rules = createRules(config, options.guards);
 
@@ -92,6 +93,10 @@ export function createPermissionsAPI<
     state: State
   ): boolean {
     return state.status !== 'loading' && rules.satisfies(require, state);
+  }
+
+  function isPending(state: State): boolean {
+    return state.status === 'idle' || state.status === 'loading';
   }
 
   function resolvePolicy(
@@ -127,6 +132,11 @@ export function createPermissionsAPI<
     require: PermissionGateRequire<PermissionId>;
     children: RenderableChildren;
     fallback?: ReactNode;
+    /**
+     * Rendered instead of `fallback` while the permissions are not known
+     * yet: before anything is set and during the first load.
+     */
+    loading?: ReactNode;
     mode?: UIPolicyMode;
     tooltip?: ReactNode;
     TooltipComponent?: TooltipComponent;
@@ -136,6 +146,7 @@ export function createPermissionsAPI<
 
     if (typeof props.children === 'function') return props.children(allowed);
     if (allowed) return props.children;
+    if (props.loading !== undefined && isPending(state)) return props.loading;
     if ((props.mode ?? 'hide') === 'hide') return props.fallback ?? null;
 
     return renderDisabled(
@@ -157,6 +168,11 @@ export function createPermissionsAPI<
     a: F;
     children: RenderableChildren;
     fallback?: ReactNode;
+    /**
+     * Rendered instead of `fallback` while the permissions are not known
+     * yet: before anything is set and during the first load.
+     */
+    loading?: ReactNode;
     of?: Contexts[F];
     mode?: UIPolicyMode;
     tooltip?: ReactNode;
@@ -170,6 +186,7 @@ export function createPermissionsAPI<
 
     if (typeof props.children === 'function') return props.children(allowed);
     if (allowed) return props.children;
+    if (props.loading !== undefined && isPending(state)) return props.loading;
     if ((props.mode ?? ui?.mode ?? 'hide') === 'hide') {
       return props.fallback ?? null;
     }
@@ -236,11 +253,22 @@ export function createPermissionsAPI<
     );
   }
 
+  /**
+   * Returns the status of the permissions: `idle` before anything is set,
+   * `loading` during the first load, `ready` when they are known and
+   * `error` when the last load failed. Wait for `ready` or `error` before
+   * redirecting a user who lacks access.
+   */
+  function usePermissionsStatus(): PermissionsStatus {
+    return usePermissionsStore(manager, (state) => state.status);
+  }
+
   return {
     Can,
     PermissionGate,
     useCan,
     usePermissionFilter,
+    usePermissionsStatus,
     core: manager,
   } as const;
 }
