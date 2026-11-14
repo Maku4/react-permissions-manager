@@ -177,3 +177,17 @@ expectError(checker.filter({}, navItems, () => 'PostsDelete'));
 const filterAllowed = api.usePermissionFilter();
 expectType<NavItem[]>(filterAllowed(navItems, (item) => item.requires));
 expectError(filterAllowed(navItems, () => 'PostsDelete'));
+
+// 8. Status hook, loading fallback, initial state and replacing the state
+expectType<'idle' | 'loading' | 'ready' | 'error'>(api.usePermissionsStatus());
+api.Can({ I: 'update', a: 'posts', loading: null, children: null });
+api.PermissionGate({ require: 'PostsRead', loading: null, children: null });
+createPermissionsAPI(config, {
+  initial: { permissions: ['PostsRead'], roles: ['editor'] },
+});
+expectError(
+  createPermissionsAPI(config, { initial: { permissions: ['PostsDelete'] } })
+);
+expectError(createPermissionsAPI(config, { initial: { roles: ['nobody'] } }));
+api.core.set({ permissions: ['PostsRead'], roles: ['editor'] });
+api.core.set({});

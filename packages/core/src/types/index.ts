@@ -100,6 +100,15 @@ export interface CreateAPIOptions<
    * a local prop overrides it.
    */
   defaultTooltipComponent?: TooltipComponent;
+  /**
+   * Permissions and roles known before the first render, for example read
+   * from a token. The manager then starts `ready`. The manager lives in
+   * module scope, so use this in apps rendered in the browser only.
+   */
+  initial?: {
+    permissions?: readonly InferPermissionId<TCfg>[];
+    roles?: readonly InferRole<TCfg>[];
+  };
 }
 
 /** Per-feature context types read from the guards passed to the factory. */
@@ -124,8 +133,16 @@ export type PermissionGateRequire<TPerm extends string> =
       noneOf?: readonly TPerm[];
     };
 
+/**
+ * `idle`: nothing was set yet. `loading`: the first load is running.
+ * `ready`: permissions and roles are known. `error`: the last load failed.
+ */
+export type PermissionsStatus = 'idle' | 'loading' | 'ready' | 'error';
+
 export interface PermissionState<TCfg extends PermissionsConfig> {
-  status: 'idle' | 'loading' | 'ready';
+  status: PermissionsStatus;
   granted: Set<string>;
   roles: Set<InferRole<TCfg>>;
+  /** What the loader threw. Set only while `status` is `error`. */
+  error?: unknown;
 }

@@ -24,9 +24,11 @@ These checks decide what the interface shows. They are not a security boundary: 
 - [UI policy](#ui-policy)
 - [The manager](#the-manager)
 - [Hook: `usePermissionsStore`](#hook-usepermissionsstore)
+- [Hook: `usePermissionsStatus`](#hook-usepermissionsstatus)
 - [Filtering lists](#filtering-lists)
 - [Outside React: `createPermissionChecker`](#outside-react-createpermissionchecker)
 - [TypeScript guide](#typescript-guide)
+- [Client-rendered apps (Vite)](#client-rendered-apps-vite)
 - [SSR and Next.js](#ssr-and-nextjs)
 - [Accessibility](#accessibility)
 - [Troubleshooting](#troubleshooting)
@@ -97,7 +99,7 @@ Import `Can`, `PermissionGate`, `useCan` and `permissionsManager` from this file
 
 ### 3. Load the user's permissions
 
-Tell the manager what the signed-in user has. Clear it when they sign out.
+Tell the manager what the signed-in user has. Clear it when they sign out. Each load replaces what was there, so a permission the user lost disappears on the next load.
 
 ```tsx
 // permissions/PermissionsSync.tsx
@@ -123,7 +125,7 @@ export function PermissionsSync({ userId }: { userId: string | null }) {
 }
 ```
 
-If you already have the data, call `permissionsManager.grant(['PostsRead'])` or `permissionsManager.setRoles(['viewer'])` directly.
+If you already have the data, call `permissionsManager.set({ permissions: ['PostsRead'], roles: ['viewer'] })`. If you have it before the first render, for example in a token, pass it as [`initial`](#client-rendered-apps-vite) and skip the load.
 
 ### 4. Check
 
@@ -174,6 +176,7 @@ Renders its children when the user can perform action `I` on feature `a`.
 | `of`               | guard context of the feature          | Data passed to the [guard](#guards) of this action.                                  |
 | `mode`             | `'hide' \| 'disable'`                 | What to do when the check fails. Defaults to the [UI policy](#ui-policy), then hide. |
 | `fallback`         | `ReactNode`                           | Rendered instead of the children in `hide` mode.                                     |
+| `loading`          | `ReactNode`                           | Rendered instead of `fallback` while the permissions are not known yet.              |
 | `tooltip`          | `ReactNode`                           | Explanation shown in `disable` mode.                                                 |
 | `TooltipComponent` | component                             | Wraps the disabled element. See [Tooltips](#tooltips).                               |
 | `children`         | `ReactNode \| (allowed) => ReactNode` | Content, or a function that receives the result.                                     |
@@ -186,7 +189,15 @@ In `disable` mode the child stays visible. If it is a single element, it receive
 </Can>
 ```
 
-A function child receives the result and renders whatever it returns. `mode` and `fallback` are not applied.
+`loading` is used while the status is `'idle'` or `'loading'`, so a skeleton can stand in for content that may still appear. Without it, `fallback` and `mode` apply from the first render.
+
+```tsx
+<Can I="read" a="posts" loading={<Skeleton />} fallback={<NoAccess />}>
+  <PostList />
+</Can>
+```
+
+A function child receives the result and renders whatever it returns. `mode`, `fallback` and `loading` are not applied.
 
 ```tsx
 <Can I="update" a="posts">
@@ -214,7 +225,7 @@ Checks raw permission ids, without features and actions.
 
 `require` is one permission id or an object with `anyOf`, `allOf` and `noneOf`. Every list you pass must hold. A list you leave out is not checked, so `require={{}}` always passes.
 
-`PermissionGate` takes the same `mode`, `fallback`, `tooltip`, `TooltipComponent` and function children as `Can`. In `disable` mode it wraps the children in the disabled `<span>` but does not add `disabled` to the child.
+`PermissionGate` takes the same `mode`, `fallback`, `loading`, `tooltip`, `TooltipComponent` and function children as `Can`. In `disable` mode it wraps the children in the disabled `<span>` but does not add `disabled` to the child.
 
 ### Tooltips
 
@@ -319,21 +330,39 @@ The order is: props on the component, the entry for the action, the feature's `_
 
 `core` is a `PermissionsManager`. It holds the current user's permissions and roles and has no React dependency.
 
-| Method                | Description                                                                                         |
-| :-------------------- | :-------------------------------------------------------------------------------------------------- |
-| `grant(permissions)`  | Adds permissions to the ones already granted.                                                       |
-| `setRoles(roles)`     | Replaces the current roles.                                                                         |
-| `clear()`             | Removes every permission and role.                                                                  |
-| `loadFrom(loader)`    | Awaits `loader()`, which returns `{ permissions?, roles? }`. Loaded roles replace, permissions add. |
-| `startLoading()`      | Marks the state as loading.                                                                         |
-| `getState()`          | Returns `{ status, granted, roles }`.                                                               |
-| `subscribe(listener)` | Calls `listener` on every change. Returns an unsubscribe function.                                  |
+| Method                | Description                                                                          |
+| :-------------------- | :----------------------------------------------------------------------------------- |
+| `set(next)`           | Replaces every permission and role with `{ permissions?, roles? }`.                  |
+| `loadFrom(loader)`    | Awaits `loader()`, which returns `{ permissions?, roles? }`, and replaces the state. |
+| `grant(permissions)`  | Adds permissions to the ones already granted.                                        |
+| `setRoles(roles)`     | Replaces the current roles and keeps the permissions.                                |
+| `clear()`             | Removes every permission and role and returns to `'idle'`.                           |
+| `startLoading()`      | Marks the state as loading.                                                          |
+| `getState()`          | Returns `{ status, granted, roles, error? }`.                                        |
+| `subscribe(listener)` | Calls `listener` on every change. Returns an unsubscribe function.                   |
 
-`status` is `'idle'` before anything is set, `'loading'` during `loadFrom` and `'ready'` afterwards.
+### Status
 
-While the status is `'loading'`, every check is denied, including permissions granted earlier. If the loader throws, the previous permissions and roles stay and the status becomes `'ready'`, so a failed load never adds access.
+| Status      | Meaning                                         | Checks                         |
+| :---------- | :---------------------------------------------- | :----------------------------- |
+| `'idle'`    | Nothing was set yet, or `clear()` was called.   | Denied, nothing is granted.    |
+| `'loading'` | The first load is running.                      | Denied.                        |
+| `'ready'`   | Permissions and roles are known.                | Run against the current state. |
+| `'error'`   | The last load failed. `error` holds the reason. | Run against the current state. |
 
-`grant` adds and never removes. To replace a user's permissions, call `clear()` first.
+`'idle'` means "not known yet". For a visitor you know has no permissions, call `set({})`: the status becomes `'ready'` and `loading` fallbacks stop showing.
+
+### Loading and reloading
+
+`set` and `loadFrom` replace the whole state. A field left out of the result means none, so `{ permissions: ['PostsRead'] }` also removes every role.
+
+The first `loadFrom` sets the status to `'loading'`. A `loadFrom` called when the status is `'ready'` is a reload: the status and the current permissions stay until the result arrives, so the interface does not blink.
+
+If the loader throws, the permissions and roles stay as they were, the status becomes `'error'` and `getState().error` holds what was thrown. A failed load never adds access. After a failed first load nothing is granted.
+
+When loads overlap, only the one started last is applied. A load is also dropped when `set` or `clear` runs before it finishes, so a slow response cannot bring back a signed-out user's permissions.
+
+`grant` adds and never removes. To replace a user's permissions, use `set`.
 
 A role name that is not in the config grants nothing.
 
@@ -341,7 +370,7 @@ A role name that is not in the config grants nothing.
 
 ## Hook: `usePermissionsStore`
 
-Reads the manager's state in a component, for example to show a loading indicator:
+Reads the manager's state in a component. For the status alone, [`usePermissionsStatus`](#hook-usepermissionsstatus) is shorter.
 
 ```tsx
 import { usePermissionsStore } from '@react-permissions-manager/core';
@@ -357,6 +386,25 @@ function PermissionsStatus() {
 ```
 
 Without a selector it returns the whole state. A selector must return the same value for the same state, so return a primitive or a field of the state, not a new object.
+
+---
+
+## Hook: `usePermissionsStatus`
+
+Returns the [status](#status) of the permissions. Use it where a denial has a side effect, such as a redirect, so it does not fire before the permissions arrive:
+
+```tsx
+import { Navigate } from 'react-router';
+import { useCan, usePermissionsStatus } from './permissions';
+
+function RequirePostsRead({ children }: { children: React.ReactNode }) {
+  const status = usePermissionsStatus();
+  const allowed = useCan('PostsRead');
+
+  if (status === 'idle' || status === 'loading') return <Spinner />;
+  return allowed ? children : <Navigate to="/" replace />;
+}
+```
 
 ---
 
@@ -465,13 +513,43 @@ The manager's methods accept plain strings, because permissions and roles usuall
 
 ---
 
+## Client-rendered apps (Vite)
+
+In an app rendered only in the browser, one tab serves one user, so the manager in module scope is all you need.
+
+If the permissions are available before the first render, pass them as `initial`. The manager starts `'ready'` and the first render is already correct:
+
+```ts
+// permissions/index.ts
+import { createPermissionsAPI } from '@react-permissions-manager/core';
+import { permissionsConfig } from './config';
+import { readSessionFromToken } from '../auth/token';
+
+const session = readSessionFromToken();
+
+export const { Can, PermissionGate, useCan, usePermissionsStatus, core } =
+  createPermissionsAPI(permissionsConfig, {
+    initial: session
+      ? { permissions: session.permissions, roles: session.roles }
+      : undefined,
+  });
+```
+
+Call `core.loadFrom(...)` afterwards to refresh them from the API. It is a reload, so nothing is hidden while it runs.
+
+If they come only from a request, call `loadFrom` as in the [quick start](#3-load-the-users-permissions). Use the `loading` prop for content and [`usePermissionsStatus`](#hook-usepermissionsstatus) for redirects.
+
+Do not use `initial` in an app rendered on the server: the manager is shared between requests there. See below.
+
+---
+
 ## SSR and Next.js
 
 `Can`, `PermissionGate`, `useCan` and `usePermissionsStore` use hooks, so use them in Client Components. The config is plain data and can be imported anywhere.
 
 The manager created by `createPermissionsAPI` lives in module scope. On the server one module instance serves every request, so do not grant permissions there: one user's permissions would be visible to the next request. Load them in an effect on the client, as in the [quick start](#3-load-the-users-permissions).
 
-During server rendering and the first client render nothing is granted, so every check is denied and both renders match. Content appears after the effect runs. If that flash matters, render a placeholder until `status` is `'ready'`.
+During server rendering and the first client render nothing is granted, so every check is denied and both renders match. Content appears after the effect runs. If that flash matters, pass a placeholder as the `loading` prop.
 
 Protect routes and data on the server with [`createPermissionChecker`](#outside-react-createpermissionchecker), which takes the user as an argument and shares no state. Hiding a link in the interface does not stop a request.
 
@@ -491,13 +569,18 @@ Protect routes and data on the server with [`createPermissionChecker`](#outside-
 1. **Everything is denied.**
    - Check that the manager received permissions: `permissionsManager.getState()`.
    - While `status` is `'loading'`, every check is denied.
+   - When `status` is `'error'`, the load failed. Read `getState().error`.
    - Role names must match the keys of `roles` in the config.
-2. **A guarded action is always denied.**
+2. **A user is redirected before the permissions load.**
+   - Before the first load every check is denied. Wait for [`usePermissionsStatus`](#hook-usepermissionsstatus) to leave `'idle'` and `'loading'`.
+3. **A `loading` fallback never goes away.**
+   - The status is still `'idle'`. For a visitor without an account call `set({})`.
+4. **A guarded action is always denied.**
    - Pass the context: `of` on `<Can>`, or the third argument of `useCan`.
    - The guard runs only after the permission check passes.
-3. **Permissions from one user show up for another on the server.**
+5. **Permissions from one user show up for another on the server.**
    - The manager is shared between requests on the server. Grant permissions on the client only.
-4. **`usePermissionsStore` re-renders in a loop.**
+6. **`usePermissionsStore` re-renders in a loop.**
    - The selector returns a new object or array on each call. Return a primitive or a field of the state.
 
 ---

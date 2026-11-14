@@ -33,6 +33,7 @@ export type {
   PermissionGateRequire,
   PermissionsConfig,
   PermissionState,
+  PermissionsStatus,
   TooltipComponent,
   TypedGuards,
   UIPolicy,
