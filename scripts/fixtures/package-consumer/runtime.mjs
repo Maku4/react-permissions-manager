@@ -4,12 +4,15 @@ import { createRequire } from 'node:module';
 import React from 'react';
 import { renderToString } from 'react-dom/server';
 import * as esm from '@react-permissions-manager/core';
+import * as esmServer from '@react-permissions-manager/core/server';
 
 const require = createRequire(import.meta.url);
 const cjs = require('@react-permissions-manager/core');
+const cjsServer = require('@react-permissions-manager/core/server');
 const expectedVersion = process.env.EXPECTED_CORE_VERSION;
 const exports = [
   'createPermissionChecker',
+  'createPermissionGuard',
   'createPermissionsAPI',
   'definePermissionsConfig',
   'PermissionsManager',
@@ -40,5 +43,36 @@ for (const core of [esm, cjs]) {
   const checker = core.createPermissionChecker(config);
   assert.equal(checker.can({ roles: ['reader'] }, 'read', 'posts'), true);
   assert.equal(checker.can({ roles: ['reader'] }, 'update', 'posts'), false);
+  const scoped = renderToString(
+    React.createElement(
+      api.PermissionsProvider,
+      { initial: { permissions: ['PostsUpdate'] } },
+      React.createElement(
+        api.Can,
+        { I: 'update', a: 'posts', fallback: 'denied' },
+        'allowed'
+      )
+    )
+  );
+  assert.equal(scoped, 'allowed');
+}
+for (const server of [esmServer, cjsServer]) {
+  assert.deepEqual(Object.keys(server).sort(), [
+    'createPermissionChecker',
+    'createPermissionGuard',
+    'definePermissionsConfig',
+  ]);
+  const config = server.definePermissionsConfig({
+    permissions: { PostsRead: 'Read posts' },
+    features: { posts: { read: 'PostsRead' } },
+    roles: { reader: ['PostsRead'] },
+  });
+  const guard = server.createPermissionGuard(config, {
+    getSubject: () => ({ roles: ['reader'] }),
+    onDenied: () => {
+      throw new Error('denied');
+    },
+  });
+  assert.equal(await guard.can('read', 'posts'), true);
 }
 assert.deepEqual(Object.keys(esm).sort(), Object.keys(cjs).sort());

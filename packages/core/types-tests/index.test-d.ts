@@ -1,6 +1,7 @@
 import { expectError, expectType } from 'tsd';
 import {
   createPermissionChecker,
+  createPermissionGuard,
   createPermissionsAPI,
   definePermissionsConfig,
   usePermissionsStore,
@@ -191,3 +192,43 @@ expectError(
 expectError(createPermissionsAPI(config, { initial: { roles: ['nobody'] } }));
 api.core.set({ permissions: ['PostsRead'], roles: ['editor'] });
 api.core.set({});
+
+// 9. Provider and scoped manager
+api.PermissionsProvider({
+  initial: { permissions: ['PostsRead'], roles: ['editor'] },
+  children: null,
+});
+api.PermissionsProvider({ children: null });
+expectError(
+  api.PermissionsProvider({
+    initial: { permissions: ['PostsDelete'] },
+    children: null,
+  })
+);
+expectType<typeof api.core>(api.usePermissionsManager());
+
+// 10. Guard for the user of the current request
+interface SessionUser {
+  id: string;
+  roles: string[];
+}
+const guard = createPermissionGuard(config, {
+  getSubject: async (): Promise<SessionUser | null> => null,
+  onDenied: () => {
+    throw new Error('denied');
+  },
+});
+expectType<Promise<boolean>>(guard.has('PostsRead'));
+expectError(guard.has('PostsDelete'));
+expectType<Promise<boolean>>(guard.can('update', 'posts'));
+expectError(guard.can('update', 'users'));
+expectType<Promise<SessionUser>>(guard.require({ anyOf: ['PostsRead'] }));
+expectType<Promise<SessionUser>>(guard.requireCan('update', 'posts'));
+expectError(guard.require('PostsDelete'));
+expectType<Promise<NavItem[]>>(guard.filter(navItems, (item) => item.requires));
+expectError(
+  createPermissionGuard(config, {
+    getSubject: () => null,
+    onDenied: () => undefined,
+  })
+);

@@ -6,6 +6,8 @@ export { definePermissionsConfig } from './definePermissionsConfig';
 
 // Checks outside React
 export { createPermissionChecker } from './createPermissionChecker';
+export { createPermissionGuard } from './createPermissionGuard';
+export type { CreateGuardOptions } from './createPermissionGuard';
 export type {
   CreateCheckerOptions,
   PermissionSubject,

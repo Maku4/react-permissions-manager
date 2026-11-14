@@ -30,6 +30,8 @@ These checks decide what the interface shows. They are not a security boundary: 
 - [TypeScript guide](#typescript-guide)
 - [Client-rendered apps (Vite)](#client-rendered-apps-vite)
 - [SSR and Next.js](#ssr-and-nextjs)
+  - [Rendering: `PermissionsProvider`](#rendering-permissionsprovider)
+  - [Protecting routes and data](#protecting-routes-and-data)
 - [Accessibility](#accessibility)
 - [Troubleshooting](#troubleshooting)
 - [When to use CASL instead](#when-to-use-casl-instead)
@@ -441,7 +443,7 @@ On the server, in a route handler or in a test there is no component to subscrib
 
 ```ts
 // permissions/checker.ts
-import { createPermissionChecker } from '@react-permissions-manager/core';
+import { createPermissionChecker } from '@react-permissions-manager/core/server';
 import { permissionsConfig } from './config';
 
 export const permissions = createPermissionChecker(permissionsConfig);
@@ -466,17 +468,56 @@ permissions.filter(user, links, (link) => link.requires); // like usePermissionF
 
 `user` is `{ permissions?, roles? }`, each any iterable of strings. The checker keeps nothing between calls, so one instance is safe to share between requests. It has no loading state: it answers for exactly the user you pass.
 
-Pass the same `guards` to `createPermissionChecker` and `createPermissionsAPI` so both sides apply the same rules. The checker calls no React API, but it ships in the same entry point as the components, so `react` still has to be installed.
+Pass the same `guards` to `createPermissionChecker` and `createPermissionsAPI` so both sides apply the same rules.
 
-For example, to protect a route in a Next.js layout:
+The `@react-permissions-manager/core/server` entry point imports no React, so it also works in scripts and services where React is not installed. It exports `definePermissionsConfig`, `createPermissionChecker`, `createPermissionGuard` and the config types. The main entry point exports them too.
 
-```tsx
-export default async function PostsLayout({ children }: PropsWithChildren) {
-  const session = await getSession();
-  if (!permissions.can(session.user, 'read', 'posts')) notFound();
-  return children;
-}
+### `createPermissionGuard`: checks for the current request
+
+In a request handler the user is always "whoever sent this request". `createPermissionGuard` reads that user for you and adds `require` and `requireCan`, which stop the request when the check fails:
+
+```ts
+// permissions/guard.ts
+import { createPermissionGuard } from '@react-permissions-manager/core/server';
+import { permissionsConfig } from './config';
+import { getCurrentUser } from '../auth/session';
+
+export const guard = createPermissionGuard(permissionsConfig, {
+  getSubject: getCurrentUser,
+  onDenied: ({ subject }) => {
+    throw new HttpError(subject ? 403 : 401);
+  },
+});
 ```
+
+```ts
+const user = await guard.requireCan('update', 'posts', { post }); // throws through onDenied
+await guard.require({ anyOf: ['PostsCreate', 'PostsUpdate'] });
+
+if (await guard.can('delete', 'posts')) {
+  // ...
+}
+const visible = await guard.filter(links, (link) => link.requires);
+```
+
+| Option       | Description                                                                                                      |
+| :----------- | :--------------------------------------------------------------------------------------------------------------- |
+| `getSubject` | Returns the user of the current request, or `null`. May be async. It runs on every call, so memoize it.          |
+| `onDenied`   | Runs when `require` or `requireCan` fails. It must throw or redirect. `subject` is `null` for a signed-out user. |
+| `guards`     | The same guards as in `createPermissionsAPI`.                                                                    |
+
+| Method                                  | Returns                                                         |
+| :-------------------------------------- | :-------------------------------------------------------------- |
+| `has(permission)`                       | `Promise<boolean>`                                              |
+| `can(action, feature, context?)`        | `Promise<boolean>`                                              |
+| `satisfies(require)`                    | `Promise<boolean>`                                              |
+| `filter(items, getRequirement)`         | `Promise<TItem[]>`                                              |
+| `require(require)`                      | The user, as returned by `getSubject`. Calls `onDenied` if not. |
+| `requireCan(action, feature, context?)` | The user. Calls `onDenied` if not.                              |
+
+Without a user every check is denied, including `require({})`. `filter` then keeps only the items without a requirement.
+
+The guard keeps no state. The user comes from `getSubject` on each call, so one guard is safe to share between requests. See [SSR and Next.js](#ssr-and-nextjs) for a full Next.js setup.
 
 ---
 
@@ -539,19 +580,110 @@ Call `core.loadFrom(...)` afterwards to refresh them from the API. It is a reloa
 
 If they come only from a request, call `loadFrom` as in the [quick start](#3-load-the-users-permissions). Use the `loading` prop for content and [`usePermissionsStatus`](#hook-usepermissionsstatus) for redirects.
 
-Do not use `initial` in an app rendered on the server: the manager is shared between requests there. See below.
+Do not use the `initial` option of `createPermissionsAPI` in an app rendered on the server: the manager is shared between requests there. Use [`PermissionsProvider`](#rendering-permissionsprovider) instead.
 
 ---
 
 ## SSR and Next.js
 
-`Can`, `PermissionGate`, `useCan` and `usePermissionsStore` use hooks, so use them in Client Components. The config is plain data and can be imported anywhere.
+On the server one module instance serves every request, so the shared manager (`core`) must not hold a user there: one user's permissions would be visible to the next request. Two tools replace it. `PermissionsProvider` gives each rendered tree its own manager, and [`createPermissionGuard`](#createpermissionguard-checks-for-the-current-request) protects routes and data.
 
-The manager created by `createPermissionsAPI` lives in module scope. On the server one module instance serves every request, so do not grant permissions there: one user's permissions would be visible to the next request. Load them in an effect on the client, as in the [quick start](#3-load-the-users-permissions).
+### Rendering: `PermissionsProvider`
 
-During server rendering and the first client render nothing is granted, so every check is denied and both renders match. Content appears after the effect runs. If that flash matters, pass a placeholder as the `loading` prop.
+Create the API in a Client Component module, because the components and hooks run on the client:
 
-Protect routes and data on the server with [`createPermissionChecker`](#outside-react-createpermissionchecker), which takes the user as an argument and shares no state. Hiding a link in the interface does not stop a request.
+```tsx
+// permissions/index.ts
+'use client';
+import { createPermissionsAPI } from '@react-permissions-manager/core';
+import { permissionsConfig } from './config';
+
+export const { Can, PermissionGate, useCan, PermissionsProvider } =
+  createPermissionsAPI(permissionsConfig);
+```
+
+Read the session on the server and pass it down:
+
+```tsx
+// app/(app)/layout.tsx
+import { PermissionsProvider } from '@/permissions';
+import { getCurrentUser } from '@/auth/session';
+
+export default async function AppLayout({ children }: LayoutProps<'/'>) {
+  const user = await getCurrentUser();
+  return (
+    <PermissionsProvider
+      initial={user ? { permissions: user.permissions, roles: user.roles } : {}}
+    >
+      {children}
+    </PermissionsProvider>
+  );
+}
+```
+
+The server render and the first client render both use `initial`, so permitted content is in the HTML and nothing flashes. `Can`, `PermissionGate` and the hooks below the provider read its manager and ignore `core`.
+
+| `initial`                | The provider's manager starts as                        |
+| :----------------------- | :------------------------------------------------------ |
+| `{ permissions, roles }` | `'ready'` with these.                                   |
+| `{}`                     | `'ready'` with nothing: a known user without access.    |
+| left out                 | `'idle'`: not known yet. `loading` fallbacks are shown. |
+
+When `initial` changes, for example after `router.refresh()`, the provider replaces its manager's state with the new value. A new object with the same content changes nothing.
+
+To change the permissions from a component, for example after the user switches a workspace, get the provider's manager with `usePermissionsManager()`:
+
+```tsx
+const manager = usePermissionsManager();
+await manager.loadFrom(fetchPermissions);
+```
+
+Outside a provider `usePermissionsManager()` returns `core`.
+
+### Protecting routes and data
+
+Hiding a button does not stop a request. Check on the server, next to the data:
+
+```ts
+// permissions/guard.ts
+import 'server-only';
+import { cache } from 'react';
+import { forbidden, redirect } from 'next/navigation';
+import { createPermissionGuard } from '@react-permissions-manager/core/server';
+import { permissionsConfig } from './config';
+import { getSession } from '@/auth/session';
+
+const getUser = cache(async () => (await getSession())?.user ?? null);
+
+export const guard = createPermissionGuard(permissionsConfig, {
+  getSubject: getUser,
+  onDenied: ({ subject }) => (subject ? forbidden() : redirect('/login')),
+});
+```
+
+```tsx
+// app/(app)/posts/page.tsx
+export default async function PostsPage() {
+  await guard.requireCan('read', 'posts');
+  return <PostList posts={await getPosts()} />;
+}
+```
+
+```ts
+// app/(app)/posts/actions.ts
+'use server';
+
+export async function updatePost(id: string, data: PostInput) {
+  const post = await getPost(id);
+  const user = await guard.requireCan('update', 'posts', { post });
+  // ...
+}
+```
+
+- `cache` from React makes `getSubject` read the session once per request.
+- `forbidden()` needs `experimental.authInterrupts` in `next.config`. Without it, use `notFound()` or a redirect.
+- `forbidden()`, `redirect()` and `notFound()` work by throwing, so `await` every `require` call and do not wrap it in a `try` that swallows the error.
+- Call the guard in pages, server functions and route handlers, or in the functions that load the data. A check in a layout alone is not enough: layouts do not re-render on client navigation.
 
 ---
 
@@ -579,7 +711,7 @@ Protect routes and data on the server with [`createPermissionChecker`](#outside-
    - Pass the context: `of` on `<Can>`, or the third argument of `useCan`.
    - The guard runs only after the permission check passes.
 5. **Permissions from one user show up for another on the server.**
-   - The manager is shared between requests on the server. Grant permissions on the client only.
+   - The shared manager is used on the server. Wrap the tree in [`PermissionsProvider`](#rendering-permissionsprovider) and do not call `core` there.
 6. **`usePermissionsStore` re-renders in a loop.**
    - The selector returns a new object or array on each call. Return a primitive or a field of the state.
 

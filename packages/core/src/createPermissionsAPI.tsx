@@ -1,8 +1,13 @@
 import {
   cloneElement,
+  createContext,
   isValidElement,
   useCallback,
+  useContext,
+  useEffect,
   useMemo,
+  useState,
+  type Context,
   type ReactNode,
 } from 'react';
 import { usePermissionsStore } from './hooks/usePermissionsStore';
@@ -80,7 +85,66 @@ export function createPermissionsAPI<
   type Contexts = FeatureContexts<TCfg, TGuards>;
   type State = PermissionState<TCfg>;
 
-  const manager = new PermissionsManager<TCfg>(options.initial);
+  type Manager = PermissionsManager<TCfg>;
+  type Initial = NonNullable<CreateAPIOptions<TCfg>['initial']>;
+
+  const manager: Manager = new PermissionsManager<TCfg>(options.initial);
+
+  // Created on first use, inside a component. Server code can then import
+  // the module that calls this factory, where `createContext` is missing.
+  let managerContext: Context<Manager | null> | undefined;
+  function getManagerContext() {
+    managerContext ??= createContext<Manager | null>(null);
+    return managerContext;
+  }
+
+  /**
+   * Returns the manager of the nearest `PermissionsProvider`, or the
+   * shared one (`core`) outside a provider.
+   */
+  function usePermissionsManager(): Manager {
+    return useContext(getManagerContext()) ?? manager;
+  }
+
+  /**
+   * Gives the components and hooks below it their own manager, starting
+   * with `initial`. Use it when rendering on the server, where the shared
+   * manager would be visible to every request. When `initial` changes,
+   * the manager is replaced with the new value. Without `initial` it
+   * starts `idle`.
+   */
+  function PermissionsProvider(props: {
+    initial?: Initial;
+    children: ReactNode;
+  }) {
+    const initialKey =
+      props.initial === undefined
+        ? undefined
+        : JSON.stringify([
+            props.initial.permissions ?? [],
+            props.initial.roles ?? [],
+          ]);
+    const [scope] = useState(() => ({
+      manager: new PermissionsManager<TCfg>(props.initial),
+      appliedKey: initialKey,
+    }));
+    const { initial } = props;
+    useEffect(() => {
+      if (scope.appliedKey === initialKey) return;
+      scope.appliedKey = initialKey;
+      if (initial === undefined) scope.manager.clear();
+      else scope.manager.set(initial);
+      // `initialKey` stands for the content of `initial`
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [scope, initialKey]);
+
+    const ManagerContext = getManagerContext();
+    return (
+      <ManagerContext.Provider value={scope.manager}>
+        {props.children}
+      </ManagerContext.Provider>
+    );
+  }
 
   const rules = createRules(config, options.guards);
 
@@ -141,7 +205,7 @@ export function createPermissionsAPI<
     tooltip?: ReactNode;
     TooltipComponent?: TooltipComponent;
   }) {
-    const state = usePermissionsStore(manager);
+    const state = usePermissionsStore(usePermissionsManager());
     const allowed = meetsRequirement(props.require, state);
 
     if (typeof props.children === 'function') return props.children(allowed);
@@ -178,7 +242,7 @@ export function createPermissionsAPI<
     tooltip?: ReactNode;
     TooltipComponent?: TooltipComponent;
   }) {
-    const state = usePermissionsStore(manager);
+    const state = usePermissionsStore(usePermissionsManager());
     const { allowed, ui } = useMemo(
       () => evaluate(props.I, props.a, props.of, state),
       [props.I, props.a, props.of, state]
@@ -217,7 +281,7 @@ export function createPermissionsAPI<
     feature?: FeatureName,
     context?: unknown
   ): boolean | { allowed: boolean; ui?: UIPolicyEntry } {
-    const state = usePermissionsStore(manager);
+    const state = usePermissionsStore(usePermissionsManager());
     const actionResult = useMemo(
       () =>
         feature === undefined
@@ -235,7 +299,7 @@ export function createPermissionsAPI<
    * change, so it works as a `useMemo` dependency.
    */
   function usePermissionFilter() {
-    const state = usePermissionsStore(manager);
+    const state = usePermissionsStore(usePermissionsManager());
     return useCallback(
       <TItem,>(
         items: readonly TItem[],
@@ -260,7 +324,10 @@ export function createPermissionsAPI<
    * redirecting a user who lacks access.
    */
   function usePermissionsStatus(): PermissionsStatus {
-    return usePermissionsStore(manager, (state) => state.status);
+    return usePermissionsStore(
+      usePermissionsManager(),
+      (state) => state.status
+    );
   }
 
   return {
@@ -269,6 +336,8 @@ export function createPermissionsAPI<
     useCan,
     usePermissionFilter,
     usePermissionsStatus,
+    usePermissionsManager,
+    PermissionsProvider,
     core: manager,
   } as const;
 }
