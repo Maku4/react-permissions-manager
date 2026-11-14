@@ -1,5 +1,6 @@
 import { act, render, screen } from '@testing-library/react';
-import { useEffect } from 'react';
+import { StrictMode, Suspense, useEffect, useLayoutEffect } from 'react';
+import { hydrateRoot } from 'react-dom/client';
 import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { createPermissionsAPI, definePermissionsConfig } from '../src';
@@ -76,6 +77,75 @@ describe('PermissionsProvider', () => {
 
     rerender(<App />);
     expect(screen.getByText('denied')).toBeInTheDocument();
+  });
+
+  it.each([false, true])(
+    'never commits a new user with the previous grants (strict: %s)',
+    (strict) => {
+      const { useCan, PermissionsProvider } = createPermissionsAPI(config);
+      const committed: string[] = [];
+      const Probe = ({ user }: { user: string }) => {
+        const allowed = useCan('PostsUpdate');
+        useLayoutEffect(() => {
+          committed.push(`${user}:${allowed}`);
+        });
+        return null;
+      };
+      const App = ({ user, roles }: { user: string; roles?: 'editor'[] }) => {
+        const tree = (
+          <PermissionsProvider initial={roles && { roles }}>
+            <Probe user={user} />
+          </PermissionsProvider>
+        );
+        return strict ? <StrictMode>{tree}</StrictMode> : tree;
+      };
+      const { rerender } = render(<App user="alice" roles={['editor']} />);
+      rerender(<App user="bob" roles={[]} />);
+      rerender(<App user="carol" roles={['editor']} />);
+      rerender(<App user="dave" />);
+
+      expect(new Set(committed)).toEqual(
+        new Set(['alice:true', 'bob:false', 'carol:true', 'dave:false'])
+      );
+    }
+  );
+
+  it('hydrates with the initial state when the state changes before hydration ends', async () => {
+    const { Can, PermissionsProvider, usePermissionsManager } =
+      createPermissionsAPI(config);
+    const Revoke = () => {
+      const manager = usePermissionsManager();
+      useEffect(() => {
+        manager.set({});
+      }, [manager]);
+      return null;
+    };
+    const App = () => (
+      <PermissionsProvider initial={{ roles: ['viewer'] }}>
+        <Revoke />
+        <Suspense>
+          <Can I="read" a="posts" fallback={<span>denied</span>}>
+            <span>allowed</span>
+          </Can>
+        </Suspense>
+      </PermissionsProvider>
+    );
+    const container = document.createElement('div');
+    document.body.append(container);
+    container.innerHTML = renderToString(<App />);
+    expect(container.textContent).toBe('allowed');
+
+    const recoverable: unknown[] = [];
+    let root: ReturnType<typeof hydrateRoot> | undefined;
+    await act(async () => {
+      root = hydrateRoot(container, <App />, {
+        onRecoverableError: (error) => recoverable.push(error),
+      });
+    });
+    expect(recoverable).toEqual([]);
+    expect(container.textContent).toBe('denied');
+    await act(async () => root?.unmount());
+    container.remove();
   });
 
   it('keeps later changes when initial is a new array with equal content', () => {

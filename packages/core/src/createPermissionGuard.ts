@@ -90,7 +90,10 @@ export function createPermissionGuard<
     getRequirement: (item: TItem) => Requirement | undefined
   ): Promise<TItem[]> {
     const subject = await currentSubject();
-    return checker.filter(subject ?? {}, items, getRequirement);
+    if (subject === null) {
+      return items.filter((item) => getRequirement(item) === undefined);
+    }
+    return checker.filter(subject, items, getRequirement);
   }
 
   /**

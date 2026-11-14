@@ -193,6 +193,44 @@ describe('PermissionsManager', () => {
     expect(Array.from(manager.getState().granted)).toEqual(['p2']);
   });
 
+  it.each([
+    ['set', () => manager.set({ permissions: ['p2'] })],
+    ['grant', () => manager.grant(['p2'])],
+    ['setRoles', () => manager.setRoles(['viewer'])],
+  ])('a pending load does not undo a later %s', async (_name, change) => {
+    let finish: (loaded: { roles: string[] }) => void = () => {};
+    let fail: (reason: Error) => void = () => {};
+    const succeeding = manager.loadFrom(
+      () => new Promise((resolve) => (finish = resolve))
+    );
+    change();
+    const afterChange = manager.getState();
+    finish({ roles: ['admin'] });
+    await succeeding;
+    expect(manager.getState()).toBe(afterChange);
+
+    const failing = manager.loadFrom(
+      () => new Promise((_resolve, reject) => (fail = reject))
+    );
+    change();
+    const afterSecondChange = manager.getState();
+    fail(new Error('network'));
+    await failing;
+    expect(manager.getState()).toBe(afterSecondChange);
+    expect(manager.getState().status).toBe('ready');
+  });
+
+  it('getInitialState keeps the state the manager was created with', () => {
+    const seeded = new PermissionsManager<typeof permissionsConfig>({
+      roles: ['viewer'],
+    });
+    const initial = seeded.getState();
+    seeded.set({});
+    seeded.clear();
+    expect(seeded.getInitialState()).toBe(initial);
+    expect(manager.getInitialState().status).toBe('idle');
+  });
+
   it('drops a load that finishes after clear', async () => {
     let finish: (loaded: { permissions: string[] }) => void = () => {};
     const pending = manager.loadFrom(

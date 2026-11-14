@@ -4,7 +4,6 @@ import {
   isValidElement,
   useCallback,
   useContext,
-  useEffect,
   useMemo,
   useState,
   type Context,
@@ -110,8 +109,8 @@ export function createPermissionsAPI<
    * Gives the components and hooks below it their own manager, starting
    * with `initial`. Use it when rendering on the server, where the shared
    * manager would be visible to every request. When `initial` changes,
-   * the manager is replaced with the new value. Without `initial` it
-   * starts `idle`.
+   * the provider switches to a new manager that starts with the new value.
+   * Without `initial` it starts `idle`.
    */
   function PermissionsProvider(props: {
     initial?: Initial;
@@ -124,23 +123,24 @@ export function createPermissionsAPI<
             props.initial.permissions ?? [],
             props.initial.roles ?? [],
           ]);
-    const [scope] = useState(() => ({
+    const [scope, setScope] = useState(() => ({
       manager: new PermissionsManager<TCfg>(props.initial),
-      appliedKey: initialKey,
+      initialKey,
     }));
-    const { initial } = props;
-    useEffect(() => {
-      if (scope.appliedKey === initialKey) return;
-      scope.appliedKey = initialKey;
-      if (initial === undefined) scope.manager.clear();
-      else scope.manager.set(initial);
-      // `initialKey` stands for the content of `initial`
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [scope, initialKey]);
+    // A changed `initial` gets a new manager in this same render, so no
+    // child ever renders the new user with the previous user's grants
+    let current = scope;
+    if (scope.initialKey !== initialKey) {
+      current = {
+        manager: new PermissionsManager<TCfg>(props.initial),
+        initialKey,
+      };
+      setScope(current);
+    }
 
     const ManagerContext = getManagerContext();
     return (
-      <ManagerContext.Provider value={scope.manager}>
+      <ManagerContext.Provider value={current.manager}>
         {props.children}
       </ManagerContext.Provider>
     );
@@ -148,19 +148,21 @@ export function createPermissionsAPI<
 
   const rules = createRules(config, options.guards);
 
+  // Before the permissions are known nothing is allowed, also not a
+  // requirement that an empty set of grants would meet, such as `noneOf`
+  function isPending(state: State): boolean {
+    return state.status === 'idle' || state.status === 'loading';
+  }
+
   function hasPermission(permission: string, state: State): boolean {
-    return state.status !== 'loading' && rules.has(permission, state);
+    return !isPending(state) && rules.has(permission, state);
   }
 
   function meetsRequirement(
     require: PermissionGateRequire<PermissionId>,
     state: State
   ): boolean {
-    return state.status !== 'loading' && rules.satisfies(require, state);
-  }
-
-  function isPending(state: State): boolean {
-    return state.status === 'idle' || state.status === 'loading';
+    return !isPending(state) && rules.satisfies(require, state);
   }
 
   function resolvePolicy(
@@ -181,9 +183,7 @@ export function createPermissionsAPI<
     state: State
   ): { allowed: boolean; ui?: UIPolicyEntry } {
     return {
-      allowed:
-        state.status !== 'loading' &&
-        rules.can(action, feature, context, state),
+      allowed: !isPending(state) && rules.can(action, feature, context, state),
       ui: resolvePolicy(feature, action),
     };
   }

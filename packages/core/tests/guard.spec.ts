@@ -55,9 +55,17 @@ describe('createPermissionGuard', () => {
     expect(await guard.has('PostsRead')).toBe(false);
     expect(await guard.can('read', 'posts')).toBe(false);
     expect(await guard.satisfies({})).toBe(false);
-    expect(await guard.filter([{ open: true }], () => undefined)).toEqual([
-      { open: true },
-    ]);
+    const items = [
+      { id: 'open' },
+      { id: 'empty', needs: {} },
+      { id: 'none', needs: { noneOf: ['PostsUpdate'] } },
+      { id: 'read', needs: 'PostsRead' },
+    ] as const;
+    expect(
+      await guard.filter(items, (item) =>
+        'needs' in item ? item.needs : undefined
+      )
+    ).toEqual([{ id: 'open' }]);
     await expect(guard.require({})).rejects.toMatchObject({ signedIn: false });
   });
 
@@ -77,6 +85,29 @@ describe('createPermissionGuard', () => {
     ).resolves.toMatchObject({ id: 'u1' });
     await expect(
       guard.requireCan('update', 'posts', { authorId: 'u2', userId: 'u1' })
+    ).rejects.toBeInstanceOf(Denied);
+  });
+
+  it('treats an async guard as a denial', async () => {
+    const guard = createPermissionGuard(config, {
+      getSubject: () => ({ roles: ['editor'] }),
+      onDenied: () => {
+        throw new Denied(true);
+      },
+      guards: {
+        byFeature: {
+          posts: {
+            // An async guard returns a promise, which must not count as true
+            update: (async () => true) as unknown as (
+              context: object
+            ) => boolean,
+          },
+        },
+      },
+    });
+    expect(await guard.can('update', 'posts', {})).toBe(false);
+    await expect(
+      guard.requireCan('update', 'posts', {})
     ).rejects.toBeInstanceOf(Denied);
   });
 

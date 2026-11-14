@@ -28,8 +28,9 @@ for (const core of [esm, cjs]) {
     features: { posts: { read: 'PostsRead', update: 'PostsUpdate' } },
     roles: { reader: ['PostsRead'] },
   });
-  const api = core.createPermissionsAPI(config);
-  api.core.setRoles(['reader']);
+  const api = core.createPermissionsAPI(config, {
+    initial: { roles: ['reader'] },
+  });
   const render = (action) =>
     renderToString(
       React.createElement(

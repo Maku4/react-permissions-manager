@@ -68,8 +68,10 @@ export function createRules<TCfg extends PermissionsConfig>(
       Record<string, Record<string, unknown> | undefined> | undefined;
     const guard = byFeature?.[feature]?.[action];
     if (typeof guard !== 'function') return true;
-    // A guarded action without a context is denied: the guard cannot run
-    return context !== undefined && Boolean(guard(context));
+    // A guarded action without a context is denied: the guard cannot run.
+    // Only `true` allows. A promise from an async guard is truthy, so
+    // anything else, a promise included, is a denial.
+    return context !== undefined && guard(context) === true;
   }
 
   return { has, satisfies, can };

@@ -225,7 +225,7 @@ Checks raw permission ids, without features and actions.
 </PermissionGate>
 ```
 
-`require` is one permission id or an object with `anyOf`, `allOf` and `noneOf`. Every list you pass must hold. A list you leave out is not checked, so `require={{}}` always passes.
+`require` is one permission id or an object with `anyOf`, `allOf` and `noneOf`. Every list you pass must hold. A list you leave out is not checked, so `require={{}}` passes for every user whose permissions are known. Before they are known, in the `'idle'` and `'loading'` [status](#status), nothing passes, `noneOf` included.
 
 `PermissionGate` takes the same `mode`, `fallback`, `loading`, `tooltip`, `TooltipComponent` and function children as `Can`. In `disable` mode it wraps the children in the disabled `<span>` but does not add `disabled` to the child.
 
@@ -304,6 +304,7 @@ Pass the data through `of`:
 
 - A guard runs only when the user has the permission for the action.
 - A guarded action checked without a context is denied. The guard cannot run, so the answer is no.
+- A guard allows only by returning `true`. Any other value is a denial, including the promise an `async` guard returns, so keep guards synchronous and load the data before the check.
 - Actions of the same feature without a guard ignore the context.
 
 ---
@@ -332,27 +333,28 @@ The order is: props on the component, the entry for the action, the feature's `_
 
 `core` is a `PermissionsManager`. It holds the current user's permissions and roles and has no React dependency.
 
-| Method                | Description                                                                          |
-| :-------------------- | :----------------------------------------------------------------------------------- |
-| `set(next)`           | Replaces every permission and role with `{ permissions?, roles? }`.                  |
-| `loadFrom(loader)`    | Awaits `loader()`, which returns `{ permissions?, roles? }`, and replaces the state. |
-| `grant(permissions)`  | Adds permissions to the ones already granted.                                        |
-| `setRoles(roles)`     | Replaces the current roles and keeps the permissions.                                |
-| `clear()`             | Removes every permission and role and returns to `'idle'`.                           |
-| `startLoading()`      | Marks the state as loading.                                                          |
-| `getState()`          | Returns `{ status, granted, roles, error? }`.                                        |
-| `subscribe(listener)` | Calls `listener` on every change. Returns an unsubscribe function.                   |
+| Method                | Description                                                                            |
+| :-------------------- | :------------------------------------------------------------------------------------- |
+| `set(next)`           | Replaces every permission and role with `{ permissions?, roles? }`.                    |
+| `loadFrom(loader)`    | Awaits `loader()`, which returns `{ permissions?, roles? }`, and replaces the state.   |
+| `grant(permissions)`  | Adds permissions to the ones already granted.                                          |
+| `setRoles(roles)`     | Replaces the current roles and keeps the permissions.                                  |
+| `clear()`             | Removes every permission and role and returns to `'idle'`.                             |
+| `startLoading()`      | Marks the state as loading.                                                            |
+| `getState()`          | Returns `{ status, granted, roles, error? }`.                                          |
+| `getInitialState()`   | Returns the state the manager was created with. Server rendering and hydration use it. |
+| `subscribe(listener)` | Calls `listener` on every change. Returns an unsubscribe function.                     |
 
 ### Status
 
 | Status      | Meaning                                         | Checks                         |
 | :---------- | :---------------------------------------------- | :----------------------------- |
-| `'idle'`    | Nothing was set yet, or `clear()` was called.   | Denied, nothing is granted.    |
+| `'idle'`    | Nothing was set yet, or `clear()` was called.   | Denied.                        |
 | `'loading'` | The first load is running.                      | Denied.                        |
 | `'ready'`   | Permissions and roles are known.                | Run against the current state. |
 | `'error'`   | The last load failed. `error` holds the reason. | Run against the current state. |
 
-`'idle'` means "not known yet". For a visitor you know has no permissions, call `set({})`: the status becomes `'ready'` and `loading` fallbacks stop showing.
+`'idle'` means "not known yet", so even a requirement that an empty set of permissions would meet, such as `noneOf`, is denied. For a visitor you know has no permissions, call `set({})`: the status becomes `'ready'` and `loading` fallbacks stop showing.
 
 ### Loading and reloading
 
@@ -362,7 +364,7 @@ The first `loadFrom` sets the status to `'loading'`. A `loadFrom` called when th
 
 If the loader throws, the permissions and roles stay as they were, the status becomes `'error'` and `getState().error` holds what was thrown. A failed load never adds access. After a failed first load nothing is granted.
 
-When loads overlap, only the one started last is applied. A load is also dropped when `set` or `clear` runs before it finishes, so a slow response cannot bring back a signed-out user's permissions.
+When loads overlap, only the one started last is applied. A load is also dropped when `set`, `grant`, `setRoles` or `clear` runs before it finishes. The later call wins, so a slow response cannot bring back a signed-out user's permissions or a role you just removed.
 
 `grant` adds and never removes. To replace a user's permissions, use `set`.
 
@@ -629,7 +631,9 @@ The server render and the first client render both use `initial`, so permitted c
 | `{}`                     | `'ready'` with nothing: a known user without access.    |
 | left out                 | `'idle'`: not known yet. `loading` fallbacks are shown. |
 
-When `initial` changes, for example after `router.refresh()`, the provider replaces its manager's state with the new value. A new object with the same content changes nothing.
+When `initial` changes, for example after `router.refresh()`, the provider switches to a new manager that starts with the new value, in the same render. No component renders the new user with the previous user's permissions. Changes made through the old manager are dropped. A new object with the same content changes nothing.
+
+Server rendering and hydration read the state a manager was created with. Changes made to `core` on the server therefore never reach the HTML, and a change made on the client before hydration ends shows up right after it, without a hydration mismatch.
 
 To change the permissions from a component, for example after the user switches a workspace, get the provider's manager with `usePermissionsManager()`:
 
@@ -680,7 +684,7 @@ export async function updatePost(id: string, data: PostInput) {
 }
 ```
 
-- `cache` from React makes `getSubject` read the session once per request.
+- `cache` from React makes `getSubject` read the session once per render of Server Components. It does not memoize in Route Handlers: there, call `require` once and reuse the user it returns.
 - `forbidden()` needs `experimental.authInterrupts` in `next.config`. Without it, use `notFound()` or a redirect.
 - `forbidden()`, `redirect()` and `notFound()` work by throwing, so `await` every `require` call and do not wrap it in a `try` that swallows the error.
 - Call the guard in pages, server functions and route handlers, or in the functions that load the data. A check in a layout alone is not enough: layouts do not re-render on client navigation.
@@ -700,7 +704,7 @@ export async function updatePost(id: string, data: PostInput) {
 
 1. **Everything is denied.**
    - Check that the manager received permissions: `permissionsManager.getState()`.
-   - While `status` is `'loading'`, every check is denied.
+   - While `status` is `'idle'` or `'loading'`, every check is denied. Call `set({})` for a visitor who has no permissions.
    - When `status` is `'error'`, the load failed. Read `getState().error`.
    - Role names must match the keys of `roles` in the config.
 2. **A user is redirected before the permissions load.**
