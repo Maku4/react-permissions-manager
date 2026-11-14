@@ -9,6 +9,7 @@ const require = createRequire(import.meta.url);
 const cjs = require('@react-permissions-manager/core');
 const expectedVersion = process.env.EXPECTED_CORE_VERSION;
 const exports = [
+  'createPermissionChecker',
   'createPermissionsAPI',
   'definePermissionsConfig',
   'PermissionsManager',
@@ -36,5 +37,8 @@ for (const core of [esm, cjs]) {
     );
   assert.equal(render('read'), 'allowed');
   assert.equal(render('update'), 'denied');
+  const checker = core.createPermissionChecker(config);
+  assert.equal(checker.can({ roles: ['reader'] }, 'read', 'posts'), true);
+  assert.equal(checker.can({ roles: ['reader'] }, 'update', 'posts'), false);
 }
 assert.deepEqual(Object.keys(esm).sort(), Object.keys(cjs).sort());

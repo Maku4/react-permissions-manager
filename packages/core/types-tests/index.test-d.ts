@@ -1,5 +1,6 @@
 import { expectError, expectType } from 'tsd';
 import {
+  createPermissionChecker,
   createPermissionsAPI,
   definePermissionsConfig,
   usePermissionsStore,
@@ -140,3 +141,39 @@ expectType<PermissionState<typeof config>>(usePermissionsStore(api.core));
 expectType<number>(
   usePermissionsStore(api.core, (state) => state.granted.size)
 );
+
+// 6. Checker for code outside React
+const checker = createPermissionChecker(config);
+expectType<boolean>(checker.has({ permissions: ['PostsRead'] }, 'PostsRead'));
+expectError(checker.has({}, 'PostsDelete'));
+expectType<boolean>(checker.can({ roles: ['editor'] }, 'update', 'posts'));
+expectError(checker.can({}, 'update', 'users'));
+expectType<boolean>(checker.satisfies({}, { anyOf: ['PostsRead'] }));
+expectError(checker.satisfies({}, { anyOf: ['PostsDelete'] }));
+
+const guardedChecker = createPermissionChecker(config, {
+  guards: {
+    byFeature: {
+      posts: {
+        context: {} as PostContext,
+        update: (context: PostContext) => context.authorId === context.userId,
+      },
+    },
+  },
+});
+guardedChecker.can({}, 'update', 'posts', { authorId: 'a', userId: 'a' });
+expectError(guardedChecker.can({}, 'update', 'posts', { authorId: 'a' }));
+
+// 6.1. Filtering keeps the item type and checks requirement ids
+interface NavItem {
+  href: string;
+  requires?: PermissionId<typeof config>;
+}
+const navItems: NavItem[] = [];
+expectType<NavItem[]>(checker.filter({}, navItems, (item) => item.requires));
+expectError(checker.filter({}, navItems, () => 'PostsDelete'));
+
+// 7. Filter hook
+const filterAllowed = api.usePermissionFilter();
+expectType<NavItem[]>(filterAllowed(navItems, (item) => item.requires));
+expectError(filterAllowed(navItems, () => 'PostsDelete'));

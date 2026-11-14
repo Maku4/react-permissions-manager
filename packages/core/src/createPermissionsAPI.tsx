@@ -1,6 +1,13 @@
-import { cloneElement, isValidElement, useMemo, type ReactNode } from 'react';
+import {
+  cloneElement,
+  isValidElement,
+  useCallback,
+  useMemo,
+  type ReactNode,
+} from 'react';
 import { usePermissionsStore } from './hooks/usePermissionsStore';
 import { PermissionsManager } from './manager/PermissionsManager';
+import { createRules } from './rules/createRules';
 import type {
   CreateAPIOptions,
   FeatureContexts,
@@ -9,7 +16,6 @@ import type {
   InferActionNameFor,
   InferFeatureName,
   InferPermissionId,
-  InferRole,
   PermissionGateRequire,
   PermissionsConfig,
   PermissionState,
@@ -24,13 +30,6 @@ interface DisabledElementProps {
   disabled?: boolean;
   'aria-disabled'?: boolean;
   title?: string;
-}
-
-function normalizeRequire<T extends string>(
-  require: PermissionGateRequire<T>
-): { anyOf?: readonly T[]; allOf?: readonly T[]; noneOf?: readonly T[] } {
-  if (typeof require === 'string') return { anyOf: [require] };
-  return require ?? {};
 }
 
 function renderDisabled(
@@ -77,30 +76,22 @@ export function createPermissionsAPI<
   type PermissionId = InferPermissionId<TCfg>;
   type FeatureName = InferFeatureName<TCfg>;
   type ActionName = InferActionName<TCfg>;
-  type AppRole = InferRole<TCfg>;
   type Contexts = FeatureContexts<TCfg, TGuards>;
   type State = PermissionState<TCfg>;
 
   const manager = new PermissionsManager<TCfg>();
 
-  let cachedRoles: ReadonlySet<AppRole> | undefined;
-  let cachedRolePermissions = new Set<string>();
-
-  function rolesToPermissions(roles: ReadonlySet<AppRole>): Set<string> {
-    if (roles === cachedRoles) return cachedRolePermissions;
-    const result = new Set<string>();
-    for (const role of roles) {
-      for (const permission of config.roles[role] ?? []) result.add(permission);
-    }
-    cachedRoles = roles;
-    cachedRolePermissions = result;
-    return result;
-  }
+  const rules = createRules(config, options.guards);
 
   function hasPermission(permission: string, state: State): boolean {
-    if (state.status === 'loading') return false;
-    if (state.granted.has(permission)) return true;
-    return rolesToPermissions(state.roles).has(permission);
+    return state.status !== 'loading' && rules.has(permission, state);
+  }
+
+  function meetsRequirement(
+    require: PermissionGateRequire<PermissionId>,
+    state: State
+  ): boolean {
+    return state.status !== 'loading' && rules.satisfies(require, state);
   }
 
   function resolvePolicy(
@@ -114,28 +105,18 @@ export function createPermissionsAPI<
     return featurePolicy?.[action] ?? featurePolicy?._default;
   }
 
-  function resolveGuard(feature: string, action: string): unknown {
-    const byFeature = options.guards?.byFeature as
-      Record<string, Record<string, unknown> | undefined> | undefined;
-    return byFeature?.[feature]?.[action];
-  }
-
   function evaluate(
     action: string,
     feature: string,
     context: unknown,
     state: State
   ): { allowed: boolean; ui?: UIPolicyEntry } {
-    const permission = config.features[feature]?.[action];
-    let allowed = permission !== undefined && hasPermission(permission, state);
-
-    const guard = resolveGuard(feature, action);
-    if (allowed && typeof guard === 'function') {
-      // A guarded action without a context is denied: the guard cannot run
-      allowed = context !== undefined && Boolean(guard(context));
-    }
-
-    return { allowed, ui: resolvePolicy(feature, action) };
+    return {
+      allowed:
+        state.status !== 'loading' &&
+        rules.can(action, feature, context, state),
+      ui: resolvePolicy(feature, action),
+    };
   }
 
   /**
@@ -151,14 +132,7 @@ export function createPermissionsAPI<
     TooltipComponent?: TooltipComponent;
   }) {
     const state = usePermissionsStore(manager);
-    const required = normalizeRequire(props.require);
-    const has = (permission: PermissionId) => hasPermission(permission, state);
-
-    const allowed =
-      state.status !== 'loading' &&
-      (required.anyOf?.some(has) ?? true) &&
-      (required.allOf?.every(has) ?? true) &&
-      (required.noneOf?.every((permission) => !has(permission)) ?? true);
+    const allowed = meetsRequirement(props.require, state);
 
     if (typeof props.children === 'function') return props.children(allowed);
     if (allowed) return props.children;
@@ -237,10 +211,36 @@ export function createPermissionsAPI<
     return actionResult ?? hasPermission(permissionOrAction, state);
   }
 
+  /**
+   * Returns a function that keeps the items the user may see.
+   * `getRequirement` returns what an item needs, or `undefined` for an item
+   * everyone may see. The function changes when permissions or roles
+   * change, so it works as a `useMemo` dependency.
+   */
+  function usePermissionFilter() {
+    const state = usePermissionsStore(manager);
+    return useCallback(
+      <TItem,>(
+        items: readonly TItem[],
+        getRequirement: (
+          item: TItem
+        ) => PermissionGateRequire<PermissionId> | undefined
+      ): TItem[] =>
+        items.filter((item) => {
+          const requirement = getRequirement(item);
+          return (
+            requirement === undefined || meetsRequirement(requirement, state)
+          );
+        }),
+      [state]
+    );
+  }
+
   return {
     Can,
     PermissionGate,
     useCan,
+    usePermissionFilter,
     core: manager,
   } as const;
 }

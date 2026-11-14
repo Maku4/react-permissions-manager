@@ -24,10 +24,13 @@ These checks decide what the interface shows. They are not a security boundary: 
 - [UI policy](#ui-policy)
 - [The manager](#the-manager)
 - [Hook: `usePermissionsStore`](#hook-usepermissionsstore)
+- [Filtering lists](#filtering-lists)
+- [Outside React: `createPermissionChecker`](#outside-react-createpermissionchecker)
 - [TypeScript guide](#typescript-guide)
 - [SSR and Next.js](#ssr-and-nextjs)
 - [Accessibility](#accessibility)
 - [Troubleshooting](#troubleshooting)
+- [When to use CASL instead](#when-to-use-casl-instead)
 - [Bundling and versioning](#bundling-and-versioning)
 - [Contributing and security](#contributing-and-security)
 - [License](#license)
@@ -357,6 +360,78 @@ Without a selector it returns the whole state. A selector must return the same v
 
 ---
 
+## Filtering lists
+
+Menus, tabs and dashboards are lists where each item may need a permission. `usePermissionFilter` returns a function that keeps the items the user may see:
+
+```tsx
+const links = [
+  { href: '/', label: 'Home' },
+  { href: '/posts', label: 'Posts', requires: 'PostsRead' },
+  { href: '/posts/new', label: 'New post', requires: 'PostsCreate' },
+] as const;
+
+function Menu() {
+  const filterAllowed = usePermissionFilter();
+  const visibleLinks = useMemo(
+    () => filterAllowed(links, (link) => link.requires),
+    [filterAllowed]
+  );
+  return visibleLinks.map((link) => <a href={link.href}>{link.label}</a>);
+}
+```
+
+The second argument returns what an item needs: a permission id, an object with `anyOf`, `allOf` and `noneOf`, or `undefined` for an item everyone may see. The returned function changes when permissions or roles change, so it works as a `useMemo` dependency. While permissions are loading, only unrestricted items are kept.
+
+Get `usePermissionFilter` from `createPermissionsAPI`, next to `Can` and `useCan`.
+
+---
+
+## Outside React: `createPermissionChecker`
+
+On the server, in a route handler or in a test there is no component to subscribe. `createPermissionChecker` gives the same checks as plain functions that take the user they are about:
+
+```ts
+// permissions/checker.ts
+import { createPermissionChecker } from '@react-permissions-manager/core';
+import { permissionsConfig } from './config';
+
+export const permissions = createPermissionChecker(permissionsConfig);
+```
+
+```ts
+const user = { permissions: session.permissions, roles: session.roles };
+
+permissions.has(user, 'PostsRead'); // like useCan('PostsRead')
+permissions.can(user, 'update', 'posts'); // like <Can I="update" a="posts">
+permissions.can(user, 'update', 'posts', { post, user }); // with a guard context
+permissions.satisfies(user, { anyOf: ['PostsCreate', 'PostsUpdate'] }); // like <PermissionGate>
+permissions.filter(user, links, (link) => link.requires); // like usePermissionFilter
+```
+
+| Method                                 | Returns                                                     |
+| :------------------------------------- | :---------------------------------------------------------- |
+| `has(user, permission)`                | Whether the user has the permission, directly or by a role. |
+| `can(user, action, feature, context?)` | Whether the action is allowed, including its guard.         |
+| `satisfies(user, require)`             | Whether `anyOf`, `allOf` and `noneOf` all hold.             |
+| `filter(user, items, getRequirement)`  | The items the user may see.                                 |
+
+`user` is `{ permissions?, roles? }`, each any iterable of strings. The checker keeps nothing between calls, so one instance is safe to share between requests. It has no loading state: it answers for exactly the user you pass.
+
+Pass the same `guards` to `createPermissionChecker` and `createPermissionsAPI` so both sides apply the same rules. The checker calls no React API, but it ships in the same entry point as the components, so `react` still has to be installed.
+
+For example, to protect a route in a Next.js layout:
+
+```tsx
+export default async function PostsLayout({ children }: PropsWithChildren) {
+  const session = await getSession();
+  if (!permissions.can(session.user, 'read', 'posts')) notFound();
+  return children;
+}
+```
+
+---
+
 ## TypeScript guide
 
 Types come from the config. Derive the ones you need:
@@ -398,7 +473,7 @@ The manager created by `createPermissionsAPI` lives in module scope. On the serv
 
 During server rendering and the first client render nothing is granted, so every check is denied and both renders match. Content appears after the effect runs. If that flash matters, render a placeholder until `status` is `'ready'`.
 
-Protect routes and data on the server with your own check. Hiding a link in the interface does not stop a request.
+Protect routes and data on the server with [`createPermissionChecker`](#outside-react-createpermissionchecker), which takes the user as an argument and shares no state. Hiding a link in the interface does not stop a request.
 
 ---
 
@@ -424,6 +499,19 @@ Protect routes and data on the server with your own check. Hiding a link in the 
    - The manager is shared between requests on the server. Grant permissions on the client only.
 4. **`usePermissionsStore` re-renders in a loop.**
    - The selector returns a new object or array on each call. Return a primitive or a field of the state.
+
+---
+
+## When to use CASL instead
+
+[CASL](https://casl.js.org) is the established authorization library for JavaScript, and it does more than this one. Choose it when you need:
+
+- rules written as data, stored in a database or sent from the backend as JSON
+- conditions on records that also turn into database queries, through its Prisma and Mongoose packages
+- permissions on individual fields
+- inverted rules (`cannot`) with a reason
+
+This library is for applications where the backend already decides what a user may do and sends a list of permissions or roles, and the interface has to follow it: hide and disable elements, filter menus and guard routes, with types inferred from one config.
 
 ---
 
