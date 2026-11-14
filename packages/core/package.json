@@ -1,6 +1,6 @@
 {
   "name": "@react-permissions-manager/core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": false,
   "type": "module",
   "description": "Typed, declarative permission checks for React: features, actions, roles and guards",
