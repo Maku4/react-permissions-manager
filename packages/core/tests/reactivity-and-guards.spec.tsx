@@ -133,6 +133,32 @@ describe('guards', () => {
     expect(screen.getByText('false')).toBeInTheDocument();
   });
 
+  it('allows only when the guard returns true', () => {
+    const { useCan, core } = createPermissionsAPI(config, {
+      guards: {
+        byFeature: {
+          docs: {
+            update: ((context: { result: unknown }) =>
+              context.result) as unknown as (context: {
+              result: unknown;
+            }) => boolean,
+          },
+        },
+      },
+    });
+    core.grant(['DocsUpdate']);
+    const Probe = ({ result }: { result: unknown }) => (
+      <span>{String(useCan('update', 'docs', { result }).allowed)}</span>
+    );
+    const { rerender } = render(<Probe result={true} />);
+    expect(screen.getByText('true')).toBeInTheDocument();
+
+    for (const result of [Promise.resolve(false), 'yes', 1, {}]) {
+      rerender(<Probe result={result} />);
+      expect(screen.getByText('false')).toBeInTheDocument();
+    }
+  });
+
   it('runs the guard with the context it is given', () => {
     const { useCan, core } = createGuardedApi();
     core.grant(['DocsUpdate']);

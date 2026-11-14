@@ -524,6 +524,33 @@ try {
         }
       }
     );
+
+    await check(`React ${major} server entry imports no React`, async () => {
+      const esbuild = require('esbuild');
+      for (const format of ['esm', 'cjs']) {
+        const result = await esbuild.build({
+          stdin: {
+            contents:
+              format === 'esm'
+                ? `export * from '${PACKAGES.core}/server';`
+                : `module.exports = require('${PACKAGES.core}/server');`,
+            resolveDir: consumer,
+          },
+          bundle: true,
+          platform: 'node',
+          format,
+          external: ['react', 'react-dom'],
+          metafile: true,
+          write: false,
+          treeShaking: false,
+        });
+        const external = Object.values(result.metafile.outputs)
+          .flatMap((output) => output.imports)
+          .filter((item) => item.external)
+          .map((item) => item.path);
+        assert.deepEqual(external, [], `${format} server entry imports`);
+      }
+    });
   }
 } finally {
   await rm(temporary, { recursive: true, force: true });

@@ -71,6 +71,52 @@ describe('loading fallback', () => {
   });
 });
 
+describe('before the permissions are known', () => {
+  it('denies requirements that empty grants would meet', () => {
+    const { PermissionGate, usePermissionFilter, core } =
+      createPermissionsAPI(config);
+    const Items = () => {
+      const filterAllowed = usePermissionFilter();
+      const items = [{ needs: { noneOf: ['PostsUpdate'] } }, {}] as const;
+      return (
+        <output>
+          {
+            filterAllowed(items, (item) =>
+              'needs' in item ? item.needs : undefined
+            ).length
+          }
+        </output>
+      );
+    };
+    render(
+      <>
+        <PermissionGate
+          require={{ noneOf: ['PostsUpdate'] }}
+          loading="Checking"
+        >
+          <span>Read only</span>
+        </PermissionGate>
+        <PermissionGate require={{}} fallback={<span>Nothing yet</span>}>
+          <span>Open</span>
+        </PermissionGate>
+        <Items />
+      </>
+    );
+    expect(screen.getByText('Checking')).toBeInTheDocument();
+    expect(screen.getByText('Nothing yet')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('1');
+
+    act(() => core.set({}));
+    expect(screen.getByText('Read only')).toBeInTheDocument();
+    expect(screen.getByText('Open')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('2');
+
+    act(() => core.clear());
+    expect(screen.getByText('Checking')).toBeInTheDocument();
+    expect(screen.getByText('Nothing yet')).toBeInTheDocument();
+  });
+});
+
 describe('usePermissionsStatus', () => {
   it('follows the manager', async () => {
     const { usePermissionsStatus, core } = createPermissionsAPI(config);

@@ -14,9 +14,11 @@ export interface LoadedPermissions {
 export class PermissionsManager<TCfg extends PermissionsConfig> {
   private state: PermissionState<TCfg>;
 
+  private readonly initialState: PermissionState<TCfg>;
+
   private subscribers = new Set<() => void>();
 
-  // Bumped by every load and by every call that replaces the state, so a
+  // Bumped by every load and by every call that changes the grants, so a
   // slower, older load cannot overwrite what came after it
   private generation = 0;
 
@@ -28,6 +30,16 @@ export class PermissionsManager<TCfg extends PermissionsConfig> {
     this.state = initial
       ? readyState<TCfg>(initial)
       : { status: 'idle', granted: new Set(), roles: new Set() };
+    this.initialState = this.state;
+  }
+
+  /**
+   * Returns the state the manager was created with. Server rendering and
+   * hydration read it, so both produce the same output even when the
+   * state changes before hydration ends.
+   */
+  public getInitialState(): PermissionState<TCfg> {
+    return this.initialState;
   }
 
   public subscribe(listener: () => void): Unsubscribe {
@@ -57,6 +69,7 @@ export class PermissionsManager<TCfg extends PermissionsConfig> {
 
   /** Replaces the current roles. */
   public setRoles(roles: Iterable<string>) {
+    this.generation++;
     this.setState({
       granted: this.state.granted,
       roles: toRoleSet<TCfg>(roles),
@@ -66,6 +79,7 @@ export class PermissionsManager<TCfg extends PermissionsConfig> {
 
   /** Adds permissions to the ones already granted. */
   public grant(permissions: Iterable<string>) {
+    this.generation++;
     const granted = new Set(this.state.granted);
     for (const permission of permissions) granted.add(String(permission));
     this.setState({ granted, roles: this.state.roles, status: 'ready' });
@@ -98,7 +112,8 @@ export class PermissionsManager<TCfg extends PermissionsConfig> {
    * `error` and the thrown value is stored in `error`.
    *
    * When loads overlap, only the one started last is applied. A load is
-   * also dropped when `set` or `clear` runs before it finishes.
+   * also dropped when `set`, `grant`, `setRoles` or `clear` runs before it
+   * finishes, so the later call wins.
    */
   public async loadFrom(loader: () => Promise<LoadedPermissions>) {
     const generation = ++this.generation;

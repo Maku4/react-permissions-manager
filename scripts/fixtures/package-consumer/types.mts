@@ -5,6 +5,7 @@ import {
   type PermissionId,
   type UIPolicyEntry,
 } from '@react-permissions-manager/core';
+import { createPermissionGuard } from '@react-permissions-manager/core/server';
 
 const config = definePermissionsConfig({
   permissions: { PostsRead: 'Read posts', PostsUpdate: 'Update posts' },
@@ -50,3 +51,14 @@ function useChecks() {
   return hasPermission && result.allowed;
 }
 void useChecks;
+
+const guard = createPermissionGuard(config, {
+  getSubject: () => ({ roles: ['reader'] }),
+  onDenied: () => {
+    throw new Error('denied');
+  },
+});
+const allowed: Promise<boolean> = guard.can('read', 'posts');
+void allowed;
+// @ts-expect-error PostsDelete is not declared in the config.
+void guard.has('PostsDelete');

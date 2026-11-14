@@ -1,8 +1,12 @@
 import {
   cloneElement,
+  createContext,
   isValidElement,
   useCallback,
+  useContext,
   useMemo,
+  useState,
+  type Context,
   type ReactNode,
 } from 'react';
 import { usePermissionsStore } from './hooks/usePermissionsStore';
@@ -80,23 +84,85 @@ export function createPermissionsAPI<
   type Contexts = FeatureContexts<TCfg, TGuards>;
   type State = PermissionState<TCfg>;
 
-  const manager = new PermissionsManager<TCfg>(options.initial);
+  type Manager = PermissionsManager<TCfg>;
+  type Initial = NonNullable<CreateAPIOptions<TCfg>['initial']>;
+
+  const manager: Manager = new PermissionsManager<TCfg>(options.initial);
+
+  // Created on first use, inside a component. Server code can then import
+  // the module that calls this factory, where `createContext` is missing.
+  let managerContext: Context<Manager | null> | undefined;
+  function getManagerContext() {
+    managerContext ??= createContext<Manager | null>(null);
+    return managerContext;
+  }
+
+  /**
+   * Returns the manager of the nearest `PermissionsProvider`, or the
+   * shared one (`core`) outside a provider.
+   */
+  function usePermissionsManager(): Manager {
+    return useContext(getManagerContext()) ?? manager;
+  }
+
+  /**
+   * Gives the components and hooks below it their own manager, starting
+   * with `initial`. Use it when rendering on the server, where the shared
+   * manager would be visible to every request. When `initial` changes,
+   * the provider switches to a new manager that starts with the new value.
+   * Without `initial` it starts `idle`.
+   */
+  function PermissionsProvider(props: {
+    initial?: Initial;
+    children: ReactNode;
+  }) {
+    const initialKey =
+      props.initial === undefined
+        ? undefined
+        : JSON.stringify([
+            props.initial.permissions ?? [],
+            props.initial.roles ?? [],
+          ]);
+    const [scope, setScope] = useState(() => ({
+      manager: new PermissionsManager<TCfg>(props.initial),
+      initialKey,
+    }));
+    // A changed `initial` gets a new manager in this same render, so no
+    // child ever renders the new user with the previous user's grants
+    let current = scope;
+    if (scope.initialKey !== initialKey) {
+      current = {
+        manager: new PermissionsManager<TCfg>(props.initial),
+        initialKey,
+      };
+      setScope(current);
+    }
+
+    const ManagerContext = getManagerContext();
+    return (
+      <ManagerContext.Provider value={current.manager}>
+        {props.children}
+      </ManagerContext.Provider>
+    );
+  }
 
   const rules = createRules(config, options.guards);
 
+  // Before the permissions are known nothing is allowed, also not a
+  // requirement that an empty set of grants would meet, such as `noneOf`
+  function isPending(state: State): boolean {
+    return state.status === 'idle' || state.status === 'loading';
+  }
+
   function hasPermission(permission: string, state: State): boolean {
-    return state.status !== 'loading' && rules.has(permission, state);
+    return !isPending(state) && rules.has(permission, state);
   }
 
   function meetsRequirement(
     require: PermissionGateRequire<PermissionId>,
     state: State
   ): boolean {
-    return state.status !== 'loading' && rules.satisfies(require, state);
-  }
-
-  function isPending(state: State): boolean {
-    return state.status === 'idle' || state.status === 'loading';
+    return !isPending(state) && rules.satisfies(require, state);
   }
 
   function resolvePolicy(
@@ -117,9 +183,7 @@ export function createPermissionsAPI<
     state: State
   ): { allowed: boolean; ui?: UIPolicyEntry } {
     return {
-      allowed:
-        state.status !== 'loading' &&
-        rules.can(action, feature, context, state),
+      allowed: !isPending(state) && rules.can(action, feature, context, state),
       ui: resolvePolicy(feature, action),
     };
   }
@@ -141,7 +205,7 @@ export function createPermissionsAPI<
     tooltip?: ReactNode;
     TooltipComponent?: TooltipComponent;
   }) {
-    const state = usePermissionsStore(manager);
+    const state = usePermissionsStore(usePermissionsManager());
     const allowed = meetsRequirement(props.require, state);
 
     if (typeof props.children === 'function') return props.children(allowed);
@@ -178,7 +242,7 @@ export function createPermissionsAPI<
     tooltip?: ReactNode;
     TooltipComponent?: TooltipComponent;
   }) {
-    const state = usePermissionsStore(manager);
+    const state = usePermissionsStore(usePermissionsManager());
     const { allowed, ui } = useMemo(
       () => evaluate(props.I, props.a, props.of, state),
       [props.I, props.a, props.of, state]
@@ -217,7 +281,7 @@ export function createPermissionsAPI<
     feature?: FeatureName,
     context?: unknown
   ): boolean | { allowed: boolean; ui?: UIPolicyEntry } {
-    const state = usePermissionsStore(manager);
+    const state = usePermissionsStore(usePermissionsManager());
     const actionResult = useMemo(
       () =>
         feature === undefined
@@ -235,7 +299,7 @@ export function createPermissionsAPI<
    * change, so it works as a `useMemo` dependency.
    */
   function usePermissionFilter() {
-    const state = usePermissionsStore(manager);
+    const state = usePermissionsStore(usePermissionsManager());
     return useCallback(
       <TItem,>(
         items: readonly TItem[],
@@ -260,7 +324,10 @@ export function createPermissionsAPI<
    * redirecting a user who lacks access.
    */
   function usePermissionsStatus(): PermissionsStatus {
-    return usePermissionsStore(manager, (state) => state.status);
+    return usePermissionsStore(
+      usePermissionsManager(),
+      (state) => state.status
+    );
   }
 
   return {
@@ -269,6 +336,8 @@ export function createPermissionsAPI<
     useCan,
     usePermissionFilter,
     usePermissionsStatus,
+    usePermissionsManager,
+    PermissionsProvider,
     core: manager,
   } as const;
 }

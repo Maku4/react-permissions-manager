@@ -68,6 +68,7 @@ describe('<PermissionGate />', () => {
   });
 
   it('supports noneOf: renders only when none are present', () => {
+    manager.set({});
     render(
       <PermissionGate require={{ noneOf: ['AdminPanel'] }}>
         <div data-testid="content">content</div>
